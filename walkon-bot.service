@@ -1,0 +1,14 @@
+[Unit]
+Description=Discord walk-on sound bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/walkon-bot
+# Point this at a Node.js 22.12+ binary (e.g. an nvm install) if the system one is older.
+ExecStart=/usr/bin/node --env-file=.env src/index.js
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
