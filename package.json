@@ -2,6 +2,7 @@
   "name": "walkon-bot",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "description": "Discord bot that plays a member's walk-on clip when they join a voice channel",
   "type": "module",
   "main": "src/index.js",
