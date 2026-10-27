@@ -13,7 +13,7 @@ A small Discord bot that plays a member's walk-on clip when they join a voice ch
 - `/walkon-admin role|manager|remove|show`: only visible to members with Manage Server.
 
 Members with the manager role (`/walkon-admin manager`) can use the optional `member` field on `/walkon set`,
-`clear`, `off` and `on` to act for someone else. That member still needs the walk-on role for the clip to play.
+`preview`, `clear`, `off` and `on` to act for someone else. That member still needs the walk-on role for the clip to play.
 
 Who can set one: members with the role chosen via `/walkon-admin role`, plus anyone with Manage Server. Losing the
 role silences the clip without deleting it. Each member's clip plays at most once a minute; if several people join

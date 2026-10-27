@@ -29,7 +29,7 @@ const commands = [
       .addAttachmentOption((o) => o.setName('file').setDescription('Audio or video file').setRequired(true))
       .addStringOption((o) => o.setName('start').setDescription('Where to start, e.g. 45 or 1:23 (default: beginning)'))
       .addUserOption(memberOption))
-    .addSubcommand((sc) => sc.setName('preview').setDescription('Hear your current walk-on (only you see it)'))
+    .addSubcommand((sc) => sc.setName('preview').setDescription('Hear your current walk-on (only you see it)').addUserOption(memberOption))
     .addSubcommand((sc) => sc.setName('off').setDescription("Stop your walk-on playing (it's kept)").addUserOption(memberOption))
     .addSubcommand((sc) => sc.setName('on').setDescription('Play your walk-on again').addUserOption(memberOption))
     .addSubcommand((sc) => sc.setName('clear').setDescription('Remove your walk-on').addUserOption(memberOption))
@@ -151,7 +151,7 @@ async function handleWalkOn(interaction) {
         '',
         `Each walk-on plays at most once every ${COOLDOWN_SECONDS} s. If several people join at once, they play in turn.`,
         `Who can set one: ${roleId ? `members with <@&${roleId}>` : 'admins only (no role set yet)'}.`,
-        `${managerId ? `Members with <@&${managerId}>` : 'Admins'} can set, clear or switch off someone else's walk-on with the \`member\` option.`,
+        `${managerId ? `Members with <@&${managerId}>` : 'Admins'} can set, preview, clear or switch off someone else's walk-on with the \`member\` option.`,
         '',
         status,
       ].join('\n'),
@@ -168,11 +168,12 @@ async function handleWalkOn(interaction) {
   }
 
   if (sub === 'preview') {
-    if (!hasClip(guildId, user.id)) {
-      return interaction.reply({ content: "You don't have a walk-on yet. Use `/walkon set`.", flags: MessageFlags.Ephemeral });
-    }
-    const file = new AttachmentBuilder(clipPath(guildId, user.id), { name: 'walkon.ogg' });
-    return interaction.reply({ files: [file], flags: MessageFlags.Ephemeral });
+    if (!hasClip(guildId, tid)) return reply(noClip);
+    const file = new AttachmentBuilder(clipPath(guildId, tid), { name: 'walkon.ogg' });
+    const lines = [];
+    if (!target.self) lines.push(`${theirs}:`);
+    if (settings.isOff(guildId, tid)) lines.push("It's switched off right now.");
+    return reply(lines.join('\n') || undefined, { files: [file] });
   }
 
   // set
