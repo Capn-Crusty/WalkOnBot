@@ -16,6 +16,8 @@ if (!process.env.DISCORD_TOKEN) {
 fs.mkdirSync(CLIP_DIR, { recursive: true });
 settings.load();
 
+const memberOption = (o) => o.setName('member').setDescription('Managers only: do this for another member');
+
 const commands = [
   new SlashCommandBuilder()
     .setName('walkon')
@@ -25,11 +27,12 @@ const commands = [
       .setName('set')
       .setDescription(`Upload a sound or song (max 8 MB); ${CLIP_SECONDS} s of it is kept`)
       .addAttachmentOption((o) => o.setName('file').setDescription('Audio or video file').setRequired(true))
-      .addStringOption((o) => o.setName('start').setDescription('Where to start, e.g. 45 or 1:23 (default: beginning)')))
+      .addStringOption((o) => o.setName('start').setDescription('Where to start, e.g. 45 or 1:23 (default: beginning)'))
+      .addUserOption(memberOption))
     .addSubcommand((sc) => sc.setName('preview').setDescription('Hear your current walk-on (only you see it)'))
-    .addSubcommand((sc) => sc.setName('off').setDescription("Stop your walk-on playing (it's kept)"))
-    .addSubcommand((sc) => sc.setName('on').setDescription('Play your walk-on again'))
-    .addSubcommand((sc) => sc.setName('clear').setDescription('Remove your walk-on'))
+    .addSubcommand((sc) => sc.setName('off').setDescription("Stop your walk-on playing (it's kept)").addUserOption(memberOption))
+    .addSubcommand((sc) => sc.setName('on').setDescription('Play your walk-on again').addUserOption(memberOption))
+    .addSubcommand((sc) => sc.setName('clear').setDescription('Remove your walk-on').addUserOption(memberOption))
     .addSubcommand((sc) => sc.setName('help').setDescription('How walk-ons work and your current status')),
   new SlashCommandBuilder()
     .setName('walkon-admin')
@@ -39,6 +42,10 @@ const commands = [
     .addSubcommand((sc) => sc
       .setName('role')
       .setDescription('Set the role that may set walk-ons')
+      .addRoleOption((o) => o.setName('role').setDescription('Role').setRequired(true)))
+    .addSubcommand((sc) => sc
+      .setName('manager')
+      .setDescription('Set the role that may set walk-ons for other members')
       .addRoleOption((o) => o.setName('role').setDescription('Role').setRequired(true)))
     .addSubcommand((sc) => sc
       .setName('remove')
@@ -73,6 +80,20 @@ function mayUseWalkOn(member) {
   return isAdmin(member) || (roleId !== null && member.roles.cache.has(roleId));
 }
 
+function isManager(member) {
+  const roleId = settings.getManagerRoleId(member.guild.id);
+  return isAdmin(member) || (roleId !== null && member.roles.cache.has(roleId));
+}
+
+// Who a command acts on: yourself, or the `member` option (managers only, checked by the caller).
+function resolveTarget(interaction) {
+  const other = interaction.options.getUser('member');
+  if (!other || other.id === interaction.user.id) {
+    return { self: true, user: interaction.user, member: interaction.member };
+  }
+  return { self: false, user: other, member: interaction.options.getMember('member') };
+}
+
 function notAllowedMessage(guildId) {
   const roleId = settings.getRoleId(guildId);
   return roleId
@@ -85,14 +106,36 @@ const busy = new Set(); // members whose upload is being processed
 async function handleWalkOn(interaction) {
   const { guildId, member, user } = interaction;
   const sub = interaction.options.getSubcommand();
+  const reply = (content, extra = {}) =>
+    interaction.reply({ content, allowedMentions: { parse: [] }, flags: MessageFlags.Ephemeral, ...extra });
+
+  const target = resolveTarget(interaction);
+  if (!target.self) {
+    if (!isManager(member)) {
+      const managerId = settings.getManagerRoleId(guildId);
+      return reply(managerId
+        ? `Only members with <@&${managerId}> can do that for someone else.`
+        : 'Only admins can do that for someone else.');
+    }
+    if (!target.member) return reply("That person isn't on this server.");
+    if (target.user.bot) return reply("Bots can't have walk-ons.");
+  }
+  const tid = target.user.id;
+  const theirs = target.self ? 'Your walk-on' : `${target.user}'s walk-on`;
+  const noClip = target.self ? "You don't have a walk-on yet. Use `/walkon set`." : `${target.user} has no walk-on.`;
+  const logAction = (what) => {
+    if (!target.self) console.log(`${user.tag} ${what} walk-on for ${target.user.tag} in ${interaction.guild.name}`);
+  };
 
   if (sub === 'clear') {
-    const removed = await removeClip(guildId, user.id);
-    return interaction.reply({ content: removed ? 'Walk-on removed.' : "You don't have a walk-on.", flags: MessageFlags.Ephemeral });
+    const removed = await removeClip(guildId, tid);
+    if (removed) logAction('cleared');
+    return reply(removed ? `${theirs} was removed.` : noClip);
   }
 
   if (sub === 'help') {
     const roleId = settings.getRoleId(guildId);
+    const managerId = settings.getManagerRoleId(guildId);
     let status;
     if (!mayUseWalkOn(member)) status = roleId ? `You need the <@&${roleId}> role to have a walk-on.` : 'Walk-ons aren\'t open to members yet.';
     else if (!hasClip(guildId, user.id)) status = 'You can set a walk-on but haven\'t yet.';
@@ -108,6 +151,7 @@ async function handleWalkOn(interaction) {
         '',
         `Each walk-on plays at most once every ${COOLDOWN_SECONDS} s. If several people join at once, they play in turn.`,
         `Who can set one: ${roleId ? `members with <@&${roleId}>` : 'admins only (no role set yet)'}.`,
+        `${managerId ? `Members with <@&${managerId}>` : 'Admins'} can set, clear or switch off someone else's walk-on with the \`member\` option.`,
         '',
         status,
       ].join('\n'),
@@ -117,14 +161,10 @@ async function handleWalkOn(interaction) {
   }
 
   if (sub === 'off' || sub === 'on') {
-    if (!hasClip(guildId, user.id)) {
-      return interaction.reply({ content: "You don't have a walk-on yet. Use `/walkon set`.", flags: MessageFlags.Ephemeral });
-    }
-    settings.setOff(guildId, user.id, sub === 'off');
-    return interaction.reply({
-      content: sub === 'off' ? 'Walk-on off. Use `/walkon on` to turn it back on.' : 'Walk-on on.',
-      flags: MessageFlags.Ephemeral,
-    });
+    if (!hasClip(guildId, tid)) return reply(noClip);
+    settings.setOff(guildId, tid, sub === 'off');
+    logAction(`switched ${sub}`);
+    return reply(sub === 'off' ? `${theirs} is off. \`/walkon on\` turns it back on.` : `${theirs} is on.`);
   }
 
   if (sub === 'preview') {
@@ -136,24 +176,30 @@ async function handleWalkOn(interaction) {
   }
 
   // set
-  if (!mayUseWalkOn(member)) {
-    return interaction.reply({ content: notAllowedMessage(guildId), flags: MessageFlags.Ephemeral });
-  }
-  if (busy.has(user.id)) {
-    return interaction.reply({ content: 'Still working on your last upload.', flags: MessageFlags.Ephemeral });
-  }
-  busy.add(user.id);
+  if (target.self && !mayUseWalkOn(member)) return reply(notAllowedMessage(guildId));
+  if (busy.has(tid)) return reply(`Still working on the last upload for ${target.self ? 'you' : target.user}.`);
+  busy.add(tid);
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
-    const length = await saveClip(guildId, user.id, interaction.options.getAttachment('file'), interaction.options.getString('start'));
-    const file = new AttachmentBuilder(clipPath(guildId, user.id), { name: 'walkon.ogg' });
-    const offNote = settings.isOff(guildId, user.id) ? '\nIt\'s switched off right now. Use `/walkon on` to play it.' : '';
-    await interaction.editReply({ content: `Walk-on saved (${length.toFixed(1)} s). This is what people will hear:${offNote}`, files: [file] });
+    const length = await saveClip(guildId, tid, interaction.options.getAttachment('file'), interaction.options.getString('start'));
+    logAction('set');
+    const file = new AttachmentBuilder(clipPath(guildId, tid), { name: 'walkon.ogg' });
+    const notes = [];
+    if (settings.isOff(guildId, tid)) notes.push("It's switched off right now. `/walkon on` turns it on.");
+    if (!target.self && !mayUseWalkOn(target.member)) {
+      const roleId = settings.getRoleId(guildId);
+      notes.push(roleId ? `It won't play until they have <@&${roleId}>.` : "It won't play until a walk-on role is set and they have it.");
+    }
+    await interaction.editReply({
+      content: [`${theirs} is saved (${length.toFixed(1)} s). This is what people will hear:`, ...notes].join('\n'),
+      files: [file],
+      allowedMentions: { parse: [] },
+    });
   } catch (err) {
     if (!(err instanceof ClipError)) console.error('Saving clip failed:', err);
     await interaction.editReply(err instanceof ClipError ? err.message : 'Something went wrong saving that. Try another file.');
   } finally {
-    busy.delete(user.id);
+    busy.delete(tid);
   }
 }
 
@@ -167,6 +213,12 @@ async function handleAdmin(interaction) {
     return interaction.reply({ content: `Members with ${role} can now set walk-ons.`, flags: MessageFlags.Ephemeral });
   }
 
+  if (sub === 'manager') {
+    const role = interaction.options.getRole('role');
+    settings.setManagerRoleId(guildId, role.id);
+    return interaction.reply({ content: `Members with ${role} can now set walk-ons for others.`, flags: MessageFlags.Ephemeral });
+  }
+
   if (sub === 'remove') {
     const target = interaction.options.getUser('member');
     const removed = await removeClip(guildId, target.id);
@@ -175,11 +227,13 @@ async function handleAdmin(interaction) {
 
   // show
   const roleId = settings.getRoleId(guildId);
+  const managerId = settings.getManagerRoleId(guildId);
   const dir = `${CLIP_DIR}/${guildId}`;
   const count = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.ogg')).length : 0;
   return interaction.reply({
     content: [
       `Role: ${roleId ? `<@&${roleId}>` : 'not set (only admins can set walk-ons)'}`,
+      `Manager role: ${managerId ? `<@&${managerId}>` : 'not set (only admins can manage others)'}`,
       `Walk-ons saved: ${count}`,
       `Clip length: ${CLIP_SECONDS} s · upload limit: 8 MB · cooldown: ${COOLDOWN_SECONDS} s per member`,
     ].join('\n'),

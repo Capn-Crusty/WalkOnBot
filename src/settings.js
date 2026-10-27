@@ -28,6 +28,16 @@ export function setRoleId(guildId, roleId) {
   save();
 }
 
+// Role that may set, clear and switch walk-ons for other members.
+export function getManagerRoleId(guildId) {
+  return settings.guilds[guildId]?.managerRoleId ?? null;
+}
+
+export function setManagerRoleId(guildId, managerRoleId) {
+  settings.guilds[guildId] = { ...settings.guilds[guildId], managerRoleId };
+  save();
+}
+
 // Members who switched their own walk-on off (clip kept, not played).
 export function isOff(guildId, userId) {
   return settings.guilds[guildId]?.off?.includes(userId) ?? false;
